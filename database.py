@@ -1,7 +1,7 @@
 # database.py
 
 """
-Dynamic Database Management for the Voice SQL Agent.
+Dynamic Database Management for the DataSeek AI.
 
 This module is responsible for:
 
@@ -1194,7 +1194,7 @@ if __name__ == "__main__":
     print("=" * 60)
 
     print(
-        "             VOICE SQL AGENT DATABASE"
+        "             DataSeek AI DATABASE"
     )
 
     print("=" * 60)
