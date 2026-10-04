@@ -1,5 +1,5 @@
 """
-AI SQL Agent for the Voice SQL Agent.
+AI SQL Agent for the DataSeek AI.
 
 Responsibilities:
 
@@ -50,6 +50,7 @@ def get_groq_client():
 
     The API key is read from the GROQ_API_KEY environment variable.
     """
+
     global _groq_client
 
     if _groq_client is not None:
@@ -140,6 +141,20 @@ Rules:
     formatting, types, date formats, numeric representation, and similar
     storage details when constructing the SQL.
 
+21. When a date is stored as text in a non-ISO format such as
+    DD-MM-YYYY, never use ORDER BY directly on the text column
+    when chronological ordering is required. Extract and order by
+    year, month, and day numerically.
+
+22. Do not generate multiple SQL statements. Generate exactly one
+    SELECT statement.
+
+23. Do not use INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, REPLACE,
+    ATTACH, DETACH, PRAGMA, or any other database-modifying statement.
+
+24. If the requirement asks for chronological ordering of dates stored
+    as DD-MM-YYYY text, order numerically by year, month, and day.
+
 Return the required structured JSON object exactly matching the schema.
 
 {
@@ -190,12 +205,12 @@ def get_first_rows(limit=3):
             )
 
             cursor.execute(
-                f'''
+                f"""
                 SELECT *
                 FROM "{safe_table_name}"
                 ORDER BY rowid
                 LIMIT ?
-                ''',
+                """,
                 (int(limit),)
             )
 
@@ -414,9 +429,7 @@ def generate_with_groq(prompt):
     client = get_groq_client()
 
     try:
-
         response = client.chat.completions.create(
-
             model=GROQ_MODEL,
 
             messages=[
@@ -447,13 +460,11 @@ def generate_with_groq(prompt):
         )
 
     except Exception as error:
-
         raise RuntimeError(
             f"Groq API request failed: {error}"
         )
 
     if not response.choices:
-
         raise RuntimeError(
             "Groq returned no choices for SQL generation."
         )
@@ -495,6 +506,97 @@ def validate_provider(provider):
 
 
 # -------------------------------------------------------------------
+# SQL Safety Validation
+# -------------------------------------------------------------------
+
+def validate_generated_sql(sql):
+    """
+    Validate that the generated SQL contains exactly one SELECT
+    statement and does not contain database-modifying statements.
+    """
+
+    if not isinstance(sql, str):
+        raise RuntimeError(
+            "The generated SQL must be a string."
+        )
+
+    sql = sql.strip()
+
+    if not sql:
+        raise RuntimeError(
+            "The AI agent did not return an SQL query."
+        )
+
+    # Parse the SQL into statements.
+    statements = [
+        statement
+        for statement in sqlparse.parse(sql)
+        if str(statement).strip()
+    ]
+
+    if len(statements) != 1:
+        raise RuntimeError(
+            "The AI generated multiple SQL statements. "
+            "Only one SELECT query is allowed."
+        )
+
+    statement = statements[0]
+
+    # Find the first meaningful token.
+    first_keyword = None
+
+    for token in statement.tokens:
+        if token.is_whitespace:
+            continue
+
+        if token.ttype in sqlparse.tokens.Comment:
+            continue
+
+        value = token.value.strip().lower()
+
+        if value:
+            first_keyword = value
+            break
+
+    if first_keyword != "select":
+        raise RuntimeError(
+            "The AI generated a non-SELECT query. "
+            "Only SELECT queries are allowed."
+        )
+
+    # Additional protection against dangerous keywords.
+    dangerous_pattern = re.compile(
+        r"\b("
+        r"insert|update|delete|drop|alter|create|replace|"
+        r"attach|detach|pragma|vacuum|reindex|"
+        r"begin|commit|rollback|savepoint|release"
+        r")\b",
+        re.IGNORECASE
+    )
+
+    # Remove quoted string literals before checking keywords.
+    sql_without_strings = re.sub(
+        r"'(?:''|[^'])*'",
+        "''",
+        sql
+    )
+
+    sql_without_strings = re.sub(
+        r'"(?:""|[^"])*"',
+        '""',
+        sql_without_strings
+    )
+
+    if dangerous_pattern.search(sql_without_strings):
+        raise RuntimeError(
+            "The generated SQL contains a prohibited database "
+            "operation. Only SELECT queries are allowed."
+        )
+
+    return True
+
+
+# -------------------------------------------------------------------
 # Generate SQL
 # -------------------------------------------------------------------
 
@@ -505,12 +607,11 @@ def generate_sql(
     """
     Generate a SQLite SELECT query using Groq.
 
-    The provider argument is retained for backward compatibility with
-    the existing Flask application. Only 'groq' is accepted.
+    The provider argument is retained for backward compatibility with the
+    existing Flask application. Only 'groq' is accepted.
     """
 
     if not requirement or not requirement.strip():
-
         raise ValueError(
             "Requirement cannot be empty."
         )
@@ -522,7 +623,6 @@ def generate_sql(
     )
 
     if not is_database_ready():
-
         raise RuntimeError(
             "No database has been processed. "
             "Please upload and process a file first."
@@ -542,7 +642,6 @@ def generate_sql(
         structured_result,
         dict
     ):
-
         raise RuntimeError(
             f"{provider_name} returned an invalid response structure."
         )
@@ -556,31 +655,29 @@ def generate_sql(
         sql,
         str
     ):
-
         sql = ""
 
     sql = sql.strip()
 
     if not sql:
-
         raise RuntimeError(
             "The AI agent did not return an SQL query."
         )
 
-    # Only SELECT statements are allowed.
-    if not sql.lower().startswith(
-        "select"
-    ):
-
-        raise RuntimeError(
-            "The AI generated a non-SELECT query. "
-            "Only SELECT queries are allowed."
-        )
+    # Validate the generated SQL before it is sent to the database.
+    validate_generated_sql(
+        sql
+    )
 
     formatted_sql = sqlparse.format(
         sql,
         reindent=True,
         keyword_case="upper"
+    )
+
+    # Validate once again after formatting.
+    validate_generated_sql(
+        formatted_sql
     )
 
     structured_result["sql"] = formatted_sql
@@ -593,21 +690,18 @@ def generate_sql(
         structured_result.get("explanation"),
         str
     ):
-
         structured_result["explanation"] = ""
 
     if not isinstance(
         structured_result.get("tables_used"),
         list
     ):
-
         structured_result["tables_used"] = []
 
     if not isinstance(
         structured_result.get("columns_used"),
         list
     ):
-
         structured_result["columns_used"] = []
 
     # ---------------------------------------------------------------
@@ -630,6 +724,7 @@ def generate_sql(
     # and must never produce a malformed value such as
     #
     #   ["citystudent_id"].
+    #
     # ---------------------------------------------------------------
 
     sql_columns_used = derive_columns_used_from_sql(
@@ -637,7 +732,6 @@ def generate_sql(
     )
 
     if sql_columns_used:
-
         structured_result["columns_used"] = (
             sql_columns_used
         )
@@ -646,7 +740,6 @@ def generate_sql(
         structured_result.get("operations"),
         list
     ):
-
         structured_result["operations"] = []
 
     return structured_result
@@ -678,31 +771,26 @@ def derive_columns_used_from_sql(sql):
         sql,
         str
     ) or not sql.strip():
-
         return []
 
     # Get the actual columns from the currently uploaded table.
     table_name = get_current_table()
 
     if not table_name:
-
         return []
 
     try:
-
         schema_columns = get_columns(
             table_name
         )
 
     except Exception:
-
         return []
 
     if not isinstance(
         schema_columns,
         dict
     ):
-
         return []
 
     column_names = list(
@@ -710,7 +798,6 @@ def derive_columns_used_from_sql(sql):
     )
 
     if not column_names:
-
         return []
 
     # SQL can explicitly use SELECT *.
@@ -723,7 +810,6 @@ def derive_columns_used_from_sql(sql):
         normalized_sql,
         re.IGNORECASE
     ):
-
         return column_names
 
     # Map lowercase column names back to their actual schema spelling.
@@ -740,19 +826,16 @@ def derive_columns_used_from_sql(sql):
     # strings, comments, punctuation, keywords, etc. We only consider Name
     # tokens that exactly match a real database column.
     try:
-
         parsed_statements = sqlparse.parse(
             sql
         )
 
         if not parsed_statements:
-
             return []
 
         statement = parsed_statements[0]
 
     except Exception:
-
         return []
 
     for token in statement.flatten():
@@ -762,26 +845,23 @@ def derive_columns_used_from_sql(sql):
         value = token.value.strip()
 
         if not value:
-
             continue
 
         # Never inspect quoted string literals or comments.
+        #
         # A value such as:
         #
         # WHERE city = 'student_id'
         #
         # must not mark student_id as a column.
         if token_type in sqlparse.tokens.Literal.String:
-
             continue
 
         if token_type in sqlparse.tokens.Comment:
-
             continue
 
         # sqlparse identifies ordinary identifiers as Name tokens.
         if token_type not in sqlparse.tokens.Name:
-
             continue
 
         # Remove identifier quoting if present.
@@ -792,7 +872,6 @@ def derive_columns_used_from_sql(sql):
         cleaned_lower = cleaned.lower()
 
         if cleaned_lower in column_lookup:
-
             found.add(
                 column_lookup[cleaned_lower]
             )
@@ -838,8 +917,8 @@ IMPORTANT:
 - If TOTAL ROWS RETURNED is 10 or fewer, the supplied rows represent the
   COMPLETE result. Use ALL of them when relevant.
 
-- If TOTAL ROWS RETURNED is greater than 10, the supplied rows are only
-  a SAMPLE. Do not claim they are the complete result.
+- If TOTAL ROWS RETURNED is greater than 10, the supplied rows are only a
+  SAMPLE. Do not claim they are the complete result.
 
 - For ranked or limited requests such as top-N, bottom-N, highest-N, or
   lowest-N, if 10 or fewer rows were returned, include ALL returned rows
@@ -888,7 +967,6 @@ def build_result_summary_prompt(
         sample_rows,
         list
     ):
-
         sample_rows = []
 
     sample_rows = sample_rows[:10]
@@ -901,7 +979,6 @@ def build_result_summary_prompt(
     )
 
     if total_rows <= 10:
-
         result_notice = """
 The query returned 10 or fewer rows.
 
@@ -914,7 +991,6 @@ returned row in the summary.
 """
 
     else:
-
         result_notice = """
 The query returned more than 10 rows.
 
@@ -973,28 +1049,24 @@ def clean_result_response(text):
     ).strip()
 
     if not text:
-
         return ""
 
     if (
         text.startswith("```")
         and text.endswith("```")
     ):
-
         lines = text.splitlines()
 
         if (
             lines
             and lines[0].strip().startswith("```")
         ):
-
             lines = lines[1:]
 
         if (
             lines
             and lines[-1].strip() == "```"
         ):
-
             lines = lines[:-1]
 
         text = "\n".join(
@@ -1012,13 +1084,11 @@ def clean_result_response(text):
         )
 
         if cleaned_line:
-
             lines.append(
                 cleaned_line
             )
 
         elif lines and lines[-1] != "":
-
             lines.append("")
 
     text = "\n".join(
@@ -1040,9 +1110,7 @@ def generate_result_summary_with_groq(prompt):
     client = get_groq_client()
 
     try:
-
         response = client.chat.completions.create(
-
             model=GROQ_MODEL,
 
             messages=[
@@ -1063,13 +1131,11 @@ def generate_result_summary_with_groq(prompt):
         )
 
     except Exception as error:
-
         raise RuntimeError(
             f"Groq result-summary request failed: {error}"
         )
 
     if not response.choices:
-
         raise RuntimeError(
             "Groq returned no choices for the result summary."
         )
@@ -1082,7 +1148,6 @@ def generate_result_summary_with_groq(prompt):
     )
 
     if not summary:
-
         raise RuntimeError(
             "Groq returned an empty result summary."
         )
@@ -1123,7 +1188,6 @@ def generate_result_summary(
         sample_rows,
         list
     ):
-
         sample_rows = []
 
     sample_rows = sample_rows[:10]
