@@ -1,7 +1,7 @@
 # app.py
 
 """
-Flask application for the Voice SQL Agent.
+Flask application for the DataSeek AI.
 
 Application flow:
 
@@ -750,7 +750,7 @@ def health_check():
             "running",
 
         "service":
-            "Voice SQL Agent",
+            "DataSeek AI",
 
         "database_ready":
             is_database_ready()
@@ -767,7 +767,7 @@ if __name__ == "__main__":
     print("=" * 60)
 
     print(
-        "                 VOICE SQL AGENT"
+        "                 DataSeek AI"
     )
 
     print("=" * 60)
