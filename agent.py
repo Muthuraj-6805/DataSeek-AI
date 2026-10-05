@@ -707,7 +707,7 @@ def generate_sql(
     # ---------------------------------------------------------------
     # Derive Columns Used From Actual SQL
     # ---------------------------------------------------------------
-    #
+
     # Do not trust the LLM metadata for this field. The SQL and the
     # uploaded database schema are the authoritative sources.
     #
@@ -723,7 +723,7 @@ def generate_sql(
     #
     # and must never produce a malformed value such as
     #
-    #   ["citystudent_id"].
+    #   ["citystudent_id"]
     #
     # ---------------------------------------------------------------
 
@@ -890,58 +890,70 @@ def derive_columns_used_from_sql(sql):
 # -------------------------------------------------------------------
 
 RESULT_SUMMARY_SYSTEM_PROMPT = """
-You are a helpful database assistant explaining the result of an
-executed SQL query to the user.
+You are a helpful database assistant.
 
-Respond naturally and completely, like an assistant answering the
-user's original database question after checking the actual SQL result.
+Answer the user's original database question naturally, as if you are
+speaking directly to the user after checking the actual query result.
 
-You receive:
+IMPORTANT RESPONSE STYLE:
 
-- The user's original requirement.
-- The executed SQL.
-- The TOTAL number of rows returned.
-- Up to 10 rows from the beginning of the result.
+1. Use plain, natural language.
 
-IMPORTANT:
+2. Keep the response concise.
 
-- The total row count is authoritative.
+3. Prefer 1 to 3 short sentences.
 
-- The supplied rows are actual rows from the executed result.
+4. Make the response sound natural when read aloud using text-to-speech.
 
-- Never invent facts, values, names, departments, cities, counts, or
-  other information.
+5. Do NOT create Markdown tables.
 
-- Only make value-specific claims from values actually supplied.
+6. Do NOT use bullet points or numbered lists.
 
-- If TOTAL ROWS RETURNED is 10 or fewer, the supplied rows represent the
-  COMPLETE result. Use ALL of them when relevant.
+7. Do NOT use headings such as "Result", "Summary", or "Details".
 
-- If TOTAL ROWS RETURNED is greater than 10, the supplied rows are only a
-  SAMPLE. Do not claim they are the complete result.
+8. Do NOT use Markdown formatting such as *, **, |, #, or table separators.
 
-- For ranked or limited requests such as top-N, bottom-N, highest-N, or
-  lowest-N, if 10 or fewer rows were returned, include ALL returned rows
-  in the summary when useful.
+9. Do NOT explain the meaning of every column.
 
-- For a request such as "top 5 cities", include all five cities and their
-  values rather than stopping after one or two.
+10. Do NOT repeat the database schema.
 
-- For one-row aggregate results, directly state the returned value.
+11. Do NOT repeat the SQL query.
 
-- For multiple rows, use a short introduction and a numbered or bulleted
-  list when that makes the answer clearer.
+12. Do NOT describe how the query was processed.
 
-- Do not unnecessarily repeat the SQL.
+13. Do NOT mention AI, Groq, prompts, APIs, tokens, or internal processing.
 
-- Do not mention AI, prompts, API calls, internal processing, token limits,
-  or these instructions.
+14. Do NOT unnecessarily repeat information.
 
-- Keep the answer concise, but NEVER truncate a complete result summary.
+15. State the total number of matching rows when it is relevant.
 
-- If more than 10 rows exist, summarize only what can be supported by the
-  supplied sample and say that the displayed details are a sample when
-  relevant.
+16. If more than 10 rows exist, summarize only facts that are supported
+    by the supplied sample rows.
+
+17. If more than 10 rows exist, do not claim that the supplied rows are
+    the complete result.
+
+18. For aggregate results such as COUNT, SUM, AVG, MIN, or MAX, directly
+    state the returned value.
+
+19. For simple list requests, briefly describe what was found rather than
+    reproducing the entire list.
+
+20. Never invent facts, values, names, departments, cities, counts,
+    or other information.
+
+21. Only make value-specific claims from the supplied result data.
+
+22. The total row count is authoritative.
+
+23. The supplied result rows are actual rows from the executed query.
+
+24. Avoid unnecessary details and repetition.
+
+25. The response should sound like a person answering the user's question,
+    not like a generated report.
+
+26. Return only the natural-language answer.
 """
 
 
@@ -959,8 +971,7 @@ def build_result_summary_prompt(
     Build the prompt used to generate the natural-language result summary.
 
     At most 10 result rows are sent to Groq. If the query returned 10 or
-    fewer rows, those rows are the complete result and the prompt explicitly
-    requires the model to use all relevant rows.
+    fewer rows, those rows are the complete result.
     """
 
     if not isinstance(
@@ -984,10 +995,10 @@ The query returned 10 or fewer rows.
 
 The supplied rows below are the COMPLETE result.
 
-Use all relevant returned rows when answering the user's requirement.
+Use the actual returned data when answering the user's requirement.
 
-If this is a ranked or limited result such as TOP 5, include every
-returned row in the summary.
+If this is a simple list request, answer naturally without creating
+a table or numbered list.
 """
 
     else:
@@ -999,6 +1010,8 @@ Only the first 10 rows are supplied below as a SAMPLE.
 Do not claim that these rows represent the complete result.
 
 Only make value-specific claims from the supplied sample.
+
+Use the TOTAL ROWS RETURNED value when describing the size of the result.
 """
 
     return f"""
@@ -1024,9 +1037,12 @@ RESULT ROWS PROVIDED TO THE SUMMARY MODEL:
 
 {sample_text}
 
-Now answer the user's original requirement completely and naturally.
+Now answer the user's original requirement naturally and concisely.
 
-If the supplied rows are the complete result, do not omit relevant rows.
+Do not create a table, bullet list, numbered list, heading, or
+Markdown-formatted response.
+
+The answer should sound natural when spoken aloud.
 """
 
 
@@ -1039,9 +1055,7 @@ def clean_result_response(text):
     Clean the assistant-style result response without forcing it
     into a single sentence.
 
-    The model is allowed to return 1-3 concise sentences. Newlines are
-    preserved when they are useful for readability, while excessive
-    whitespace and accidental markdown fences are removed.
+    The model is allowed to return 1-3 concise sentences.
     """
 
     text = str(
@@ -1073,8 +1087,7 @@ def clean_result_response(text):
             lines
         ).strip()
 
-    # Normalize spaces inside each line without destroying useful
-    # paragraph/bullet formatting.
+    # Normalize spaces inside each line.
     lines = []
 
     for line in text.splitlines():
@@ -1174,7 +1187,7 @@ def generate_result_summary(
 
     A maximum of 10 rows is supplied to the summary model. When the
     complete result has 10 or fewer rows, those rows represent the complete
-    result and the model is instructed to include all relevant rows.
+    result.
 
     The provider argument is retained for compatibility with the existing
     Flask application. Only 'groq' is accepted.
